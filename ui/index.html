@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>URL Normalizer</title>
+        <script>
+            const $ = document.querySelector.bind(document);
+            const tag = document.createElement.bind(document);
+            const server = new WebSocket(`ws://${window.location.host}/api`);
+            let flag = false;
+
+            function main() {
+                const urlSource = $("#urls");
+                const check = $("#check");
+                const status = $("#status");
+                const pendingCalls = new Map();
+                const lineSplitter = /.+/g;
+                let taskId = 0;
+
+                check.addEventListener("click", async () => {
+                    check.disabled = true;
+
+                    const urls = urlSource.value.match(lineSplitter);
+
+                    status.replaceChildren(...urls.map((url) => {
+                        const row = tag("tr");
+
+                        row.appendChild(tag("td")).innerText = url;
+                        row.appendChild(tag("td")).innerText = "Checking";
+
+                        return row;
+                    }));
+
+                    await callServer("Check", { urls });
+
+                    check.disabled = false;
+                });
+
+                function nextTaskId() {
+                    return taskId++;
+                }
+
+                function callServer(method, data) {
+                    const taskId = nextTaskId();
+                    const message = JSON.stringify({ type: "Request", task_id: taskId, method, data, });
+
+                    server.send(message);
+
+                    return new Promise((resolve) => pendingCalls.set(taskId, resolve));
+                }
+
+                const handlers = {
+                    UpdateStatus: (request) => {
+                        const row = status.children[request.index];
+
+                        if (request.status === "Updated") {
+                            row.children[1].innerText = row.children[0].innerText;
+                            row.children[1].className = "status-updated";
+                        } else if (request.status === "Update") {
+                            row.children[1].innerText = request.url;
+                            row.children[1].className = "status-update";
+                        } else {
+                            row.children[1].innerText = request.message;
+                            row.children[1].className = "status-error";
+                        }
+
+                        return null;
+                    }
+                };
+
+                server.addEventListener("message", async (e) => {
+                    const message = JSON.parse(e.data);
+
+                    if (message.type === "Request") {
+                        server.send(JSON.stringify({
+                            type: "Response",
+                            task_id: message.task_id,
+                            method: message.method,
+                            data: await handlers[message.method](message.data)
+                        }));
+                    } else {
+                        const resolve = pendingCalls.get(message.task_id);
+
+                        pendingCalls.delete(message.task_id);
+
+                        resolve(message.data);
+                    }
+                });
+            }
+
+            function init() {
+                if (flag) {
+                    main();
+                } else {
+                    flag = true;
+                }
+            }
+
+            document.addEventListener("DOMContentLoaded", init);
+            server.addEventListener("open", init);
+        </script>
+        <style>
+            .status-updated {
+                color: green;
+            }
+
+            .status-update {
+                color: dodgerblue;
+            }
+
+            .status-error {
+                color: red;
+            }
+
+            body {
+                display: grid;
+                grid-template-columns: auto 1fr;
+                grid-template-rows: auto auto 1fr;
+                gap: 10px;
+                height: 100vh;
+                margin: 0;
+                padding: 10px;
+                box-sizing: border-box;
+                font: 14px / 1 system-ui;
+            }
+
+            header {
+                grid-column: 1 / -1;
+            }
+
+            #status-container {
+                grid-row: span 2;
+                overflow: auto;
+            }
+
+            #urls {
+                resize: horizontal;
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <h1>URL Normalizer</h1>
+        </header>
+        <button id="check">Check</button>
+        <div id="status-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Url</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="status">
+                </tbody>
+            </table>
+        </div>
+        <textarea id="urls"></textarea>
+    </body>
+</html>

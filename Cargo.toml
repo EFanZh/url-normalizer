@@ -1,0 +1,18 @@
+[package]
+edition = "2021"
+name = "url-normalizer"
+version = "0.1.0"
+
+[dependencies]
+anyhow = "*"
+derive_more = "*"
+futures = "*"
+hyper = { version = "*", features = ["http1", "server", "tcp"] }
+open = "*"
+reqwest = "*"
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
+tokio = { version = "*", features = ["macros", "rt"] }
+tokio-tungstenite = "*"
+tracing = "*"
+tracing-subscriber = "*"
