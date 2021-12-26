@@ -64,8 +64,8 @@ pub enum ServerMessage {
 #[cfg(test)]
 mod tests {
     use super::{
-        CheckResponse, CheckStatus, ServerMessage, ServerRequest, ServerRequestData,
-        ServerResponse, ServerResponseData, UpdateStatusRequest,
+        CheckResponse, CheckStatus, ServerMessage, ServerRequest, ServerRequestData, ServerResponse,
+        ServerResponseData, UpdateStatusRequest,
     };
     use std::num::NonZeroU64;
 

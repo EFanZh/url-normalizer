@@ -134,9 +134,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let server = Server::bind(&SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))).serve(
-        service::make_service_fn(|_| {
-            future::ready(Ok::<_, Infallible>(service::service_fn(handle_request)))
-        }),
+        service::make_service_fn(|_| future::ready(Ok::<_, Infallible>(service::service_fn(handle_request)))),
     );
 
     open::that(format!("http://{}", server.local_addr()))?;

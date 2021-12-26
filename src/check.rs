@@ -8,10 +8,7 @@ use std::fmt::Write;
 async fn check_url(client: &Client, url: String) -> CheckStatus {
     let mut buffer = String::new();
 
-    if let Some(base) = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-    {
+    if let Some(base) = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://")) {
         let base = base.trim_end_matches('/');
         let mut candidate = String::from("http");
 
@@ -75,10 +72,7 @@ pub async fn check(client_api: ClientApi, request: CheckRequest) -> CheckRespons
     .buffer_unordered(16);
 
     while let Some((i, status)) = iter.next().await {
-        if let Err(error) = client_api
-            .call(UpdateStatusRequest { index: i, status })
-            .await
-        {
+        if let Err(error) = client_api.call(UpdateStatusRequest { index: i, status }).await {
             tracing::warn!("{}", error);
         }
     }

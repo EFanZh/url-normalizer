@@ -1,10 +1,7 @@
 use crate::check;
-use crate::client_messages::{
-    ClientMessage, ClientRequest, ClientRequestData, ClientResponse, ClientResponseData,
-};
+use crate::client_messages::{ClientMessage, ClientRequest, ClientRequestData, ClientResponse, ClientResponseData};
 use crate::server_messages::{
-    ClientMethod, ServerMessage, ServerRequest, ServerRequestData, ServerResponse,
-    ServerResponseData,
+    ClientMethod, ServerMessage, ServerRequest, ServerRequestData, ServerResponse, ServerResponseData,
 };
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::channel::oneshot;
@@ -55,24 +52,17 @@ impl ClientApi {
             data: Box::new(request.into()),
             sender,
         }) {
-            Ok(()) => Either::Left(receiver.map(|result| {
-                result??
-                    .try_into()
-                    .map_err(|message| anyhow::anyhow!("{}", message))
-            })),
+            Ok(()) => Either::Left(
+                receiver.map(|result| result??.try_into().map_err(|message| anyhow::anyhow!("{}", message))),
+            ),
             Err(error) => Either::Right(future::ready(Err(error.into()))),
         }
     }
 }
 
-async fn handle_client_request(
-    client_api: ClientApi,
-    request_data: ClientRequestData,
-) -> ServerResponseData {
+async fn handle_client_request(client_api: ClientApi, request_data: ClientRequestData) -> ServerResponseData {
     match request_data {
-        ClientRequestData::Check(request) => {
-            ServerResponseData::Check(check::check(client_api, request).await)
-        }
+        ClientRequestData::Check(request) => ServerResponseData::Check(check::check(client_api, request).await),
     }
 }
 
@@ -100,19 +90,17 @@ where
         let request_data = request.data;
 
         tokio::spawn(
-            handle_client_request(ClientApi { sender: sender_1 }, request_data).map(
-                move |response| {
-                    if sender_2
-                        .unbounded_send(ServerMessage2::Response(ServerResponse {
-                            task_id,
-                            data: response,
-                        }))
-                        .is_err()
-                    {
-                        tracing::warn!("Task has completed for task {}.", task_id);
-                    }
-                },
-            ),
+            handle_client_request(ClientApi { sender: sender_1 }, request_data).map(move |response| {
+                if sender_2
+                    .unbounded_send(ServerMessage2::Response(ServerResponse {
+                        task_id,
+                        data: response,
+                    }))
+                    .is_err()
+                {
+                    tracing::warn!("Task has completed for task {}.", task_id);
+                }
+            }),
         );
     }
 
@@ -150,8 +138,8 @@ where
     fn next_task_id(&mut self) -> NonZeroU64 {
         let result = self.task_id;
 
-        self.task_id = NonZeroU64::new(self.task_id.get().wrapping_add(1))
-            .unwrap_or_else(|| NonZeroU64::new(1).unwrap());
+        self.task_id =
+            NonZeroU64::new(self.task_id.get().wrapping_add(1)).unwrap_or_else(|| NonZeroU64::new(1).unwrap());
 
         result
     }
@@ -164,8 +152,7 @@ where
 
     fn poll_receive_server(&mut self, cx: &mut Context) -> Poll<anyhow::Result<()>> {
         if self.send_buffer.is_none() {
-            self.send_buffer =
-                Some(futures::ready!(self.server_receiver.poll_next_unpin(cx)).unwrap());
+            self.send_buffer = Some(futures::ready!(self.server_receiver.poll_next_unpin(cx)).unwrap());
         }
 
         futures::ready!(self.client.poll_ready_unpin(cx)?);
