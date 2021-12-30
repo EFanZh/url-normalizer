@@ -59,7 +59,7 @@
     clippy::verbose_file_reads,
     // clippy::wildcard_dependencies,
 )]
-#![allow(clippy::non_ascii_literal)]
+#![allow(clippy::non_ascii_literal, clippy::wildcard_imports)] // https://github.com/tokio-rs/tracing/pull/1806.
 
 use crate::connection::Connection;
 use hyper::header::HeaderValue;
@@ -68,6 +68,7 @@ use std::convert::Infallible;
 use std::future;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use tokio_tungstenite::tungstenite::handshake;
+use tracing_subscriber::util::SubscriberInitExt;
 
 mod check;
 mod client_messages;
@@ -75,7 +76,7 @@ mod connection;
 mod server_messages;
 
 async fn handle_request(mut request: Request<Body>) -> anyhow::Result<Response<Body>> {
-    tracing::info!("{} {}", request.method(), request.uri());
+    tracing::info!(method = %request.method(), uri = %request.uri(), "Got client request.");
 
     if request.uri().path() == "/" {
         let mut response = Response::new(Body::from(include_str!("../ui/index.html")));
@@ -96,13 +97,11 @@ async fn handle_request(mut request: Request<Body>) -> anyhow::Result<Response<B
 
                 match upgrade::on(request).await {
                     Ok(upgraded) => match Connection::new(upgraded).await.await {
-                        Ok(()) => {}
-                        Err(error) => tracing::error!("{}", error),
+                        Ok(()) => tracing::info!("Session ended."),
+                        Err(error) => tracing::error!(%error, "Session ended with error."),
                     },
-                    Err(error) => tracing::error!("{}", error),
+                    Err(error) => tracing::error!(%error, "Failed to upgrade connection."),
                 }
-
-                tracing::info!("Session ended.");
             });
 
             *response.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
@@ -129,10 +128,7 @@ async fn handle_request(mut request: Request<Body>) -> anyhow::Result<Response<B
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
-
+async fn main_inner() -> anyhow::Result<()> {
     let server = Server::bind(&SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))).serve(
         service::make_service_fn(|_| future::ready(Ok::<_, Infallible>(service::service_fn(handle_request)))),
     );
@@ -142,4 +138,11 @@ async fn main() -> anyhow::Result<()> {
     server.await?;
 
     Ok(())
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt().finish().init();
+
+    main_inner().await
 }

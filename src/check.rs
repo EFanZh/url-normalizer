@@ -73,7 +73,7 @@ pub async fn check(client_api: ClientApi, request: CheckRequest) -> CheckRespons
 
     while let Some((i, status)) = iter.next().await {
         if let Err(error) = client_api.call(UpdateStatusRequest { index: i, status }).await {
-            tracing::warn!("{}", error);
+            tracing::warn!(%error, "Failed to update status.");
         }
     }
 
