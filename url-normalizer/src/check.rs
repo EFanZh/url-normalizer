@@ -1,5 +1,5 @@
-use crate::client_api::{CheckStatus, ServerRequestData, UpdateStatusRequest};
-use crate::server_api::{CheckRequest, CheckResponse, ClientRequestData, ServerResponseData};
+use crate::client_api::{CheckStatus, UiApi, UpdateStatusRequest};
+use crate::server_api::{BackendApi, BackendApiResponse, CheckRequest, CheckResponse};
 use futures::future::BoxFuture;
 use futures::{stream, FutureExt, StreamExt};
 use reqwest::Client;
@@ -61,7 +61,7 @@ async fn check_url(client: &Client, url: String) -> CheckStatus {
     CheckStatus::Error { message: buffer }
 }
 
-async fn check(rpc_client: RpcClient<ServerRequestData>, request: CheckRequest) -> CheckResponse {
+async fn check(rpc_client: RpcClient<UiApi>, request: CheckRequest) -> CheckResponse {
     let client = Client::new();
 
     let mut iter = stream::iter(
@@ -85,18 +85,14 @@ async fn check(rpc_client: RpcClient<ServerRequestData>, request: CheckRequest) 
 pub struct ServerImpl;
 
 impl Handler for ServerImpl {
-    type ClientApi = ServerRequestData;
-    type ServerApi = ClientRequestData;
+    type ClientApi = UiApi;
+    type ServerApi = BackendApi;
     type ServerResponseFuture = BoxFuture<'static, <Self::ServerApi as ServerApi>::Response>;
 
-    fn handle(
-        &mut self,
-        rpc_client: RpcClient<ServerRequestData>,
-        request: Self::ServerApi,
-    ) -> Self::ServerResponseFuture {
+    fn handle(&mut self, rpc_client: RpcClient<UiApi>, request: Self::ServerApi) -> Self::ServerResponseFuture {
         async move {
             match request {
-                ClientRequestData::Check(request) => ServerResponseData::Check(check(rpc_client, request).await),
+                BackendApi::Check(request) => BackendApiResponse::Check(check(rpc_client, request).await),
             }
         }
         .boxed()

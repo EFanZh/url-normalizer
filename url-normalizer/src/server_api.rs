@@ -1,6 +1,27 @@
 use serde::{Deserialize, Serialize};
 use websocket_rpc::{ServerApi, ServerMethod};
 
+// Server API.
+
+#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
+#[derive(Deserialize)]
+#[serde(tag = "method", content = "argument")]
+pub enum BackendApi {
+    Check(CheckRequest),
+}
+
+#[derive(Serialize, derive_more::From)]
+#[serde(untagged)]
+pub enum BackendApiResponse {
+    Check(CheckResponse),
+}
+
+impl ServerApi for BackendApi {
+    type Response = BackendApiResponse;
+}
+
+// Check.
+
 #[cfg_attr(test, derive(Debug, Eq, PartialEq))]
 #[derive(Deserialize)]
 pub struct CheckRequest {
@@ -10,39 +31,19 @@ pub struct CheckRequest {
 #[derive(Serialize)]
 pub struct CheckResponse;
 
-#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
-#[derive(Deserialize)]
-#[serde(tag = "method", content = "argument")]
-pub enum ClientRequestData {
-    Check(CheckRequest),
-}
-
-impl ServerApi for ClientRequestData {
-    type Response = ServerResponseData;
-}
-
-impl ServerMethod<ClientRequestData> for CheckRequest {
-    type Output = CheckResponse;
-}
-
-#[derive(Serialize, derive_more::From)]
-pub enum ServerResponseData {
-    Check(CheckResponse),
+impl ServerMethod<BackendApi> for CheckRequest {
+    type Response = CheckResponse;
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CheckRequest, CheckResponse, ClientRequestData};
+    use super::{BackendApi, CheckRequest, CheckResponse};
+    use crate::server_api::BackendApiResponse;
 
     #[test]
-    fn test_serialize_check_response() {
-        assert_eq!(serde_json::to_value(CheckResponse).unwrap(), serde_json::json!(null));
-    }
-
-    #[test]
-    fn test_deserialize_client_request_data() {
+    fn test_deserialize_backend_api() {
         assert_eq!(
-            serde_json::from_str::<ClientRequestData>(
+            serde_json::from_str::<BackendApi>(
                 r#"{
                     "method": "Check",
                     "argument": {
@@ -51,9 +52,22 @@ mod tests {
                 }"#
             )
             .unwrap(),
-            ClientRequestData::Check(CheckRequest {
+            BackendApi::Check(CheckRequest {
                 urls: ["abc", "def"].into_iter().map(str::to_string).collect()
             })
         );
+    }
+
+    #[test]
+    fn test_serialize_backend_api_response() {
+        assert_eq!(
+            serde_json::to_value(BackendApiResponse::Check(CheckResponse)).unwrap(),
+            serde_json::json!(null)
+        );
+    }
+
+    #[test]
+    fn test_serialize_check_response() {
+        assert_eq!(serde_json::to_value(CheckResponse).unwrap(), serde_json::json!(null));
     }
 }

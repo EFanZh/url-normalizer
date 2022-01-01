@@ -1,6 +1,18 @@
 use serde::{Deserialize, Serialize};
 use websocket_rpc::{ClientApi, ClientMethod};
 
+// Client API.
+
+#[derive(Serialize, derive_more::From)]
+#[serde(tag = "method", content = "argument")]
+pub enum UiApi {
+    UpdateStatus(UpdateStatusRequest),
+}
+
+impl ClientApi for UiApi {}
+
+// UpdateStatus.
+
 #[derive(Serialize)]
 #[serde(tag = "status")]
 pub enum CheckStatus {
@@ -20,21 +32,31 @@ pub struct UpdateStatusRequest {
 #[derive(Deserialize)]
 pub struct UpdateStatusResponse;
 
-#[derive(Serialize, derive_more::From)]
-#[serde(tag = "method", content = "argument")]
-pub enum ServerRequestData {
-    UpdateStatus(UpdateStatusRequest),
-}
-
-impl ClientApi for ServerRequestData {}
-
-impl ClientMethod<ServerRequestData> for UpdateStatusRequest {
-    type Output = UpdateStatusResponse;
+impl ClientMethod<UiApi> for UpdateStatusRequest {
+    type Response = UpdateStatusResponse;
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CheckStatus, ServerRequestData, UpdateStatusRequest, UpdateStatusResponse};
+    use super::{CheckStatus, UiApi, UpdateStatusRequest, UpdateStatusResponse};
+
+    #[test]
+    fn test_serialize_server_request_data() {
+        assert_eq!(
+            serde_json::to_value(UiApi::UpdateStatus(UpdateStatusRequest {
+                index: 3,
+                status: CheckStatus::Updated,
+            }))
+            .unwrap(),
+            serde_json::json!({
+                "method": "UpdateStatus",
+                "argument": {
+                    "index": 3,
+                    "status": "Updated",
+                }
+            })
+        );
+    }
 
     #[test]
     fn test_serialize_check_status() {
@@ -62,24 +84,6 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<UpdateStatusResponse>("null").unwrap(),
             UpdateStatusResponse
-        );
-    }
-
-    #[test]
-    fn test_serialize_server_request_data() {
-        assert_eq!(
-            serde_json::to_value(ServerRequestData::UpdateStatus(UpdateStatusRequest {
-                index: 3,
-                status: CheckStatus::Updated,
-            }))
-            .unwrap(),
-            serde_json::json!({
-                "method": "UpdateStatus",
-                "argument": {
-                    "index": 3,
-                    "status": "Updated",
-                }
-            })
         );
     }
 }

@@ -8,7 +8,7 @@ pub trait ClientMethod<T>: Into<T>
 where
     T: ClientApi,
 {
-    type Output: DeserializeOwned;
+    type Response: DeserializeOwned;
 }
 
 pub trait ServerApi: DeserializeOwned {
@@ -19,7 +19,7 @@ pub trait ServerMethod<T>: DeserializeOwned
 where
     T: ServerApi,
 {
-    type Output: Into<T::Response>;
+    type Response: Into<T::Response>;
 }
 
 pub struct MessageData {

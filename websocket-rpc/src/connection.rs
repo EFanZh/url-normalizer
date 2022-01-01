@@ -60,7 +60,7 @@ impl<T> RpcClient<T>
 where
     T: ClientApi,
 {
-    pub fn call<R>(&self, request: R) -> impl Future<Output = Result<R::Output, Error>>
+    pub fn call<R>(&self, request: R) -> impl Future<Output = Result<R::Response, Error>>
     where
         R: ClientMethod<T>,
     {
