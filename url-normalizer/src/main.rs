@@ -67,7 +67,10 @@ use hyper::{header, service, upgrade, Body, Method, Request, Response, Server, S
 use std::convert::Infallible;
 use std::future;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tokio_tungstenite::tungstenite::handshake;
+use tracing::Instrument;
 use tracing_subscriber::util::SubscriberInitExt;
 use websocket_rpc::Connection;
 
@@ -75,7 +78,8 @@ mod check;
 mod client_api;
 mod server_api;
 
-async fn handle_request(mut request: Request<Body>) -> anyhow::Result<Response<Body>> {
+#[tracing::instrument(name = "Request", skip(request))]
+async fn handle_request(id: usize, mut request: Request<Body>) -> anyhow::Result<Response<Body>> {
     let uri = request.uri();
 
     tracing::info!(method = %request.method(), uri = %uri, "Received HTTP request.");
@@ -96,19 +100,22 @@ async fn handle_request(mut request: Request<Body>) -> anyhow::Result<Response<B
                 request.headers_mut().remove(header::UPGRADE),
                 request.headers_mut().remove(header::SEC_WEBSOCKET_KEY),
             ) {
-                tokio::spawn(async {
-                    match upgrade::on(request).await {
-                        Ok(upgraded) => {
-                            tracing::info!("Session started.");
+                tokio::spawn(
+                    async {
+                        match upgrade::on(request).await {
+                            Ok(upgraded) => {
+                                tracing::info!("WebSocket session started.");
 
-                            match Connection::new(upgraded, ServerImpl).await.await {
-                                Ok(()) => tracing::info!("Session ended."),
-                                Err(error) => tracing::warn!(%error, "Session ended with error."),
+                                match Connection::new(upgraded, ServerImpl).await.await {
+                                    Ok(()) => tracing::info!("WebSocket session ended."),
+                                    Err(error) => tracing::warn!(%error, "WebSocket session ended with error."),
+                                }
                             }
+                            Err(error) => tracing::error!(%error, "Failed to upgrade connection."),
                         }
-                        Err(error) => tracing::error!(%error, "Failed to upgrade connection."),
                     }
-                });
+                    .instrument(tracing::info_span!("WebSocketSession")),
+                );
 
                 *response.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
 
@@ -137,8 +144,18 @@ async fn handle_request(mut request: Request<Body>) -> anyhow::Result<Response<B
 }
 
 async fn main_inner() -> anyhow::Result<()> {
+    let counter = Arc::new(AtomicUsize::new(0));
+
     let server = Server::bind(&SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))).serve(
-        service::make_service_fn(|_| future::ready(Ok::<_, Infallible>(service::service_fn(handle_request)))),
+        service::make_service_fn(move |_| {
+            let counter = Arc::clone(&counter);
+
+            future::ready(Ok::<_, Infallible>(service::service_fn(move |request| {
+                let id = counter.fetch_add(1, Ordering::Relaxed);
+
+                handle_request(id, request)
+            })))
+        }),
     );
 
     let server_url = format!("http://{}", server.local_addr());

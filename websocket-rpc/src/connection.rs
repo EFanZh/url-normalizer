@@ -1,4 +1,4 @@
-use crate::protocol::{ClientApi, ClientMethod, Message as JsonMessage, MessageData, MessageType};
+use crate::protocol::{ClientApi, ClientMethod, Message as RpcMessage, MessageData, MessageType};
 use crate::ServerApi;
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::channel::oneshot::{self, Canceled, Sender};
@@ -115,7 +115,7 @@ where
             tracing::info!(content = %message, "Received WebSocket message.");
 
             match message {
-                Message::Text(message) => match serde_json::from_str::<JsonMessage>(&message) {
+                Message::Text(message) => match serde_json::from_str::<RpcMessage>(&message) {
                     Ok(message) => match message.split() {
                         (MessageType::Request, request) => return Some(request),
                         (MessageType::Response, response) => self.handle_client_response(response),
@@ -145,7 +145,7 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     fn handle_server_response(&mut self, response: MessageData) -> tungstenite::Result<()> {
-        let message = JsonMessage::response(response).serialize_to_json_string();
+        let message = RpcMessage::response(response).serialize_to_json_string();
 
         tracing::info!(content = %message.as_str(), "Sending response to client.");
 
@@ -247,7 +247,7 @@ where
     fn handle_server_request(&mut self, request: ServerRequest) -> tungstenite::Result<()> {
         let task_id = self.next_task_id();
         let ServerRequest { data, sender } = request;
-        let message = JsonMessage::request(MessageData { task_id, data }).serialize_to_json_string();
+        let message = RpcMessage::request(MessageData { task_id, data }).serialize_to_json_string();
 
         tracing::info!(content = %message.as_str(), "Sending request to client.");
 
