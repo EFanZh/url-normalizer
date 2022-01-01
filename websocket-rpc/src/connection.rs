@@ -40,7 +40,7 @@ pub enum Error {
 
 struct ServerRequest {
     data: Box<RawValue>,
-    sender: Sender<serde_json::Result<Box<RawValue>>>,
+    sender: Sender<Box<RawValue>>,
 }
 
 enum ServerMessage {
@@ -48,37 +48,33 @@ enum ServerMessage {
     Response(MessageData),
 }
 
-pub struct RpcClient<T>
+pub struct RpcClient<C>
 where
-    T: ClientApi,
+    C: ClientApi,
 {
     sender: UnboundedSender<ServerMessage>,
-    _phantom: PhantomData<T>,
+    _phantom: PhantomData<C>,
 }
 
-impl<T> RpcClient<T>
+impl<C> RpcClient<C>
 where
-    T: ClientApi,
+    C: ClientApi,
 {
     pub fn call<R>(&self, request: R) -> impl Future<Output = Result<R::Response, Error>>
     where
-        R: ClientMethod<T>,
+        R: ClientMethod<C>,
     {
-        match value::to_raw_value(&<R as Into<T>>::into(request)).map_err(Error::Serialization) {
-            Ok(raw_value) => {
+        match value::to_raw_value::<C>(&request.into()).map_err(Error::Serialization) {
+            Ok(request_data) => {
                 let (sender, receiver) = oneshot::channel();
 
                 match self.sender.unbounded_send(ServerMessage::Request(ServerRequest {
-                    data: raw_value,
+                    data: request_data,
                     sender,
                 })) {
-                    Ok(()) => Either::Left(receiver.map(|result| {
-                        match result {
-                            Ok(result) => result
-                                .map_err(Error::Serialization)
-                                .and_then(|data| serde_json::from_str(data.get()).map_err(Error::Deserialization)),
-                            Err(Canceled) => Err(Error::ConnectionClosed),
-                        }
+                    Ok(()) => Either::Left(receiver.map(|result| match result {
+                        Ok(response_data) => serde_json::from_str(response_data.get()).map_err(Error::Deserialization),
+                        Err(Canceled) => Err(Error::ConnectionClosed),
                     })),
                     Err(_) => Either::Right(future::ready(Err(Error::ConnectionClosed))),
                 }
@@ -90,7 +86,7 @@ where
 
 struct ClientToServer<'a, T> {
     client: &'a mut WebSocketStream<T>,
-    requests: &'a mut HashMap<u64, Sender<serde_json::Result<Box<RawValue>>>>,
+    requests: &'a mut HashMap<u64, Sender<Box<RawValue>>>,
 }
 
 impl<T> ClientToServer<'_, T>
@@ -99,9 +95,12 @@ where
 {
     fn handle_client_response(&mut self, response: MessageData) {
         if let Some(sender) = self.requests.remove(&response.task_id) {
-            match sender.send(Ok(response.data)) {
+            match sender.send(response.data) {
                 Ok(()) => {}
-                Err(_) => tracing::warn!(response.task_id, "Ignoring client response, task has been canceled."),
+                Err(_) => tracing::warn!(
+                    response.task_id,
+                    "Ignoring client response, the task has been canceled."
+                ),
             }
         } else {
             tracing::warn!(response.task_id, "Ignoring client response, the task ID is invalid.");
@@ -186,7 +185,7 @@ struct Connected<'a, T, H> {
     handler: &'a mut H,
     sender: &'a mut UnboundedSender<ServerMessage>,
     receiver: &'a mut UnboundedReceiver<ServerMessage>,
-    requests: &'a mut HashMap<u64, Sender<serde_json::Result<Box<RawValue>>>>,
+    requests: &'a mut HashMap<u64, Sender<Box<RawValue>>>,
     task_id: &'a mut u64,
 }
 
@@ -292,7 +291,7 @@ enum State<'a, T, H> {
 
 struct ClientToServerData<H> {
     sender: UnboundedSender<ServerMessage>,
-    requests: HashMap<u64, Sender<serde_json::Result<Box<RawValue>>>>,
+    requests: HashMap<u64, Sender<Box<RawValue>>>,
     task_id: u64,
     handler: H,
 }
