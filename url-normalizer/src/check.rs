@@ -2,10 +2,34 @@ use crate::client_api::{CheckStatus, UiApi, UpdateStatusRequest};
 use crate::server_api::{BackendApi, BackendApiResponse, CheckRequest, CheckResponse};
 use futures::future::BoxFuture;
 use futures::{stream, FutureExt, StreamExt};
-use reqwest::Client;
+use reqwest::{Client, Url};
 use std::fmt::Write;
-use websocket_rpc::RpcClient;
-use websocket_rpc::{Handler, ServerApi};
+use websocket_rpc::{Handler, RpcClient, ServerApi};
+
+fn normalize_url(url: &Url) -> &str {
+    let url_str = url.as_str();
+    let path = url.path();
+
+    if path.bytes().any(|c| c != b'/') {
+        return url_str;
+    }
+
+    let mut trim_length = path.len();
+
+    match url.query() {
+        None => {}
+        Some("") => trim_length += 1,
+        _ => return url_str,
+    }
+
+    match url.fragment() {
+        None => {}
+        Some("") => trim_length += 1,
+        _ => return url_str,
+    }
+
+    &url_str[..url_str.len() - trim_length]
+}
 
 async fn check_url(client: &Client, url: String) -> CheckStatus {
     let mut buffer = String::new();
@@ -26,14 +50,7 @@ async fn check_url(client: &Client, url: String) -> CheckStatus {
                 match client.head(&candidate).send().await {
                     Ok(response) => {
                         if response.status().is_success() {
-                            let response_url = response.url();
-                            let response_url_str = response_url.as_str();
-
-                            let normalized_url = if response_url.path() == "/" {
-                                &response_url_str[..response_url_str.len() - 1]
-                            } else {
-                                response_url_str
-                            };
+                            let normalized_url = normalize_url(response.url());
 
                             return if normalized_url == url {
                                 CheckStatus::Updated
@@ -96,5 +113,44 @@ impl Handler for ServerImpl {
             }
         }
         .boxed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use reqwest::Url;
+
+    #[test]
+    fn test_normalize_url() {
+        let test_cases = [
+            ("https://example.com/", "https://example.com"),
+            ("https://example.com/#", "https://example.com"),
+            ("https://example.com/#foobar", "https://example.com/#foobar"),
+            ("https://example.com/?", "https://example.com"),
+            ("https://example.com/?#", "https://example.com"),
+            ("https://example.com/?foo=bar", "https://example.com/?foo=bar"),
+            ("https://example.com/?foo=bar#", "https://example.com/?foo=bar#"),
+            (
+                "https://example.com/?foo=bar#foobar",
+                "https://example.com/?foo=bar#foobar",
+            ),
+            ("https://example.com//", "https://example.com"),
+            ("https://example.com//#", "https://example.com"),
+            ("https://example.com//?", "https://example.com"),
+            ("https://example.com//?#", "https://example.com"),
+            ("https://example.com//?#foobar", "https://example.com//?#foobar"),
+            (
+                "https://example.com//?foo=bar#foobar",
+                "https://example.com//?foo=bar#foobar",
+            ),
+            ("https://example.com/a", "https://example.com/a"),
+        ];
+
+        for (url, expected) in test_cases {
+            let parsed_url = Url::parse(url).unwrap();
+
+            assert_eq!(parsed_url.as_str(), url);
+            assert_eq!(super::normalize_url(&parsed_url), expected);
+        }
     }
 }

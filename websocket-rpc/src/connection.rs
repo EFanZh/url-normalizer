@@ -506,6 +506,6 @@ where
     type Output = tungstenite::Result<()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        self.inner_poll(cx).map_err(Into::into)
+        self.inner_poll(cx)
     }
 }
