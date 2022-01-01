@@ -21,7 +21,7 @@
                 check.addEventListener("click", async () => {
                     check.disabled = true;
 
-                    const urls = urlSource.value.match(lineSplitter);
+                    const urls = urlSource.value.match(lineSplitter) || [];
 
                     status.replaceChildren(...urls.map((url) => {
                         const row = tag("tr");
@@ -41,9 +41,9 @@
                     return taskId++;
                 }
 
-                function callServer(method, data) {
+                function callServer(method, argument) {
                     const taskId = nextTaskId();
-                    const message = JSON.stringify({ type: "Request", task_id: taskId, method, data, });
+                    const message = JSON.stringify({ type: "Request", task_id: taskId, data: { method, argument } });
 
                     server.send(message);
 
@@ -70,21 +70,18 @@
                 };
 
                 server.addEventListener("message", async (e) => {
-                    const message = JSON.parse(e.data);
+                    const { type, task_id, data } = JSON.parse(e.data);
 
-                    if (message.type === "Request") {
-                        server.send(JSON.stringify({
-                            type: "Response",
-                            task_id: message.task_id,
-                            method: message.method,
-                            data: await handlers[message.method](message.data)
-                        }));
+                    if (type === "Request") {
+                        const response = await handlers[data.method](data.argument);
+
+                        server.send(JSON.stringify({ type: "Response", task_id, data: response }));
                     } else {
-                        const resolve = pendingCalls.get(message.task_id);
+                        const resolve = pendingCalls.get(task_id);
 
-                        pendingCalls.delete(message.task_id);
+                        pendingCalls.delete(task_id);
 
-                        resolve(message.data);
+                        resolve(data.argument);
                     }
                 });
             }

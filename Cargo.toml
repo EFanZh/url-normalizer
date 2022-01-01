@@ -11,8 +11,14 @@ hyper = { version = "*", features = ["http1", "server", "tcp"] }
 open = "*"
 reqwest = "*"
 serde = { version = "*", features = ["derive"] }
-serde_json = "*"
 tokio = { version = "*", features = ["macros", "rt"] }
 tokio-tungstenite = "*"
 tracing = "*"
 tracing-subscriber = "*"
+websocket-rpc = { path = "websocket-rpc" }
+
+[dev-dependencies]
+serde_json = "*"
+
+[workspace]
+members = ["websocket-rpc"]

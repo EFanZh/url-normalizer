@@ -1,9 +1,11 @@
-use crate::client_messages::CheckRequest;
-use crate::connection::ClientApi;
-use crate::server_messages::{CheckResponse, CheckStatus, UpdateStatusRequest};
+use crate::client_messages::{CheckRequest, ClientRequestData};
+use crate::server_messages::{CheckResponse, CheckStatus, ServerRequestData, ServerResponseData, UpdateStatusRequest};
+use futures::future::BoxFuture;
 use futures::{stream, FutureExt, StreamExt};
 use reqwest::Client;
 use std::fmt::Write;
+use websocket_rpc::ClientApi;
+use websocket_rpc::Handler;
 
 async fn check_url(client: &Client, url: String) -> CheckStatus {
     let mut buffer = String::new();
@@ -59,7 +61,7 @@ async fn check_url(client: &Client, url: String) -> CheckStatus {
     CheckStatus::Error { message: buffer }
 }
 
-pub async fn check(client_api: ClientApi, request: CheckRequest) -> CheckResponse {
+pub async fn check(client_api: ClientApi<ServerRequestData>, request: CheckRequest) -> CheckResponse {
     let client = Client::new();
 
     let mut iter = stream::iter(
@@ -78,4 +80,22 @@ pub async fn check(client_api: ClientApi, request: CheckRequest) -> CheckRespons
     }
 
     CheckResponse
+}
+
+pub struct ServerImpl;
+
+impl Handler for ServerImpl {
+    type ClientRequest = ServerRequestData;
+    type Request = ClientRequestData;
+    type Response = ServerResponseData;
+    type ResponseFuture = BoxFuture<'static, Self::Response>;
+
+    fn handle(&mut self, client_api: ClientApi<ServerRequestData>, request: Self::Request) -> Self::ResponseFuture {
+        async move {
+            match request {
+                ClientRequestData::Check(request) => ServerResponseData::Check(check(client_api, request).await),
+            }
+        }
+        .boxed()
+    }
 }

@@ -1,11 +1,6 @@
-use crate::client_messages::{ClientResponseData, UpdateStatusResponse};
-use derive_more::{From, TryInto};
+use crate::client_messages::UpdateStatusResponse;
 use serde::Serialize;
-use std::num::NonZeroU64;
-
-pub trait ClientMethod: Into<ServerRequestData> + Serialize {
-    type Output: TryFrom<ClientResponseData, Error = &'static str>;
-}
+use websocket_rpc::ClientMethod;
 
 #[derive(Serialize)]
 #[serde(tag = "status")]
@@ -22,52 +17,27 @@ pub struct UpdateStatusRequest {
     pub status: CheckStatus,
 }
 
-impl ClientMethod for UpdateStatusRequest {
-    type Output = UpdateStatusResponse;
-}
-
-#[derive(From, Serialize)]
-#[serde(tag = "method", content = "data")]
+#[derive(Serialize, derive_more::From)]
+#[serde(tag = "method", content = "argument")]
 pub enum ServerRequestData {
     UpdateStatus(UpdateStatusRequest),
 }
 
-#[derive(Serialize)]
-pub struct ServerRequest {
-    pub task_id: NonZeroU64,
-    #[serde(flatten)]
-    pub data: ServerRequestData,
+impl ClientMethod<ServerRequestData> for UpdateStatusRequest {
+    type Output = UpdateStatusResponse;
 }
 
 #[derive(Serialize)]
 pub struct CheckResponse;
 
-#[derive(Serialize, TryInto)]
-#[serde(untagged)]
+#[derive(Serialize)]
 pub enum ServerResponseData {
     Check(CheckResponse),
 }
 
-#[derive(Serialize)]
-pub struct ServerResponse {
-    pub task_id: u64,
-    pub data: ServerResponseData,
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type")]
-pub enum ServerMessage {
-    Request(Box<ServerRequest>),
-    Response(Box<ServerResponse>),
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        CheckResponse, CheckStatus, ServerMessage, ServerRequest, ServerRequestData, ServerResponse,
-        ServerResponseData, UpdateStatusRequest,
-    };
-    use std::num::NonZeroU64;
+    use super::{CheckResponse, CheckStatus, ServerRequestData, UpdateStatusRequest};
 
     #[test]
     fn test_serialize_check_status() {
@@ -91,19 +61,14 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_server_request_message() {
+    fn test_serialize_server_request_data() {
         assert_eq!(
-            serde_json::to_value(&ServerMessage::Request(Box::new(ServerRequest {
-                task_id: NonZeroU64::new(2).unwrap(),
-                data: ServerRequestData::UpdateStatus(UpdateStatusRequest {
-                    index: 3,
-                    status: CheckStatus::Updated,
-                })
-            })))
+            serde_json::to_value(ServerRequestData::UpdateStatus(UpdateStatusRequest {
+                index: 3,
+                status: CheckStatus::Updated,
+            }))
             .unwrap(),
             serde_json::json!({
-                "type": "Request",
-                "task_id": 2,
                 "method": "UpdateStatus",
                 "data": {
                     "index": 3,
@@ -114,18 +79,7 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_server_response_message() {
-        assert_eq!(
-            serde_json::to_value(&ServerMessage::Response(Box::new(ServerResponse {
-                task_id: 2,
-                data: ServerResponseData::Check(CheckResponse),
-            })))
-            .unwrap(),
-            serde_json::json!({
-                "type": "Response",
-                "task_id": 2,
-                "data": null,
-            })
-        );
+    fn test_serialize_check_response() {
+        assert_eq!(serde_json::to_value(CheckResponse).unwrap(), serde_json::json!(null));
     }
 }

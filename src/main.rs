@@ -61,7 +61,7 @@
 )]
 #![allow(clippy::non_ascii_literal, clippy::wildcard_imports)] // https://github.com/tokio-rs/tracing/pull/1806.
 
-use crate::connection::Connection;
+use crate::check::ServerImpl;
 use hyper::header::HeaderValue;
 use hyper::{header, service, upgrade, Body, Request, Response, Server, StatusCode};
 use std::convert::Infallible;
@@ -69,10 +69,10 @@ use std::future;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use tokio_tungstenite::tungstenite::handshake;
 use tracing_subscriber::util::SubscriberInitExt;
+use websocket_rpc::Connection;
 
 mod check;
 mod client_messages;
-mod connection;
 mod server_messages;
 
 async fn handle_request(mut request: Request<Body>) -> anyhow::Result<Response<Body>> {
@@ -96,7 +96,7 @@ async fn handle_request(mut request: Request<Body>) -> anyhow::Result<Response<B
                 tracing::info!("Session started.");
 
                 match upgrade::on(request).await {
-                    Ok(upgraded) => match Connection::new(upgraded).await.await {
+                    Ok(upgraded) => match Connection::new(upgraded, ServerImpl).await.await {
                         Ok(()) => tracing::info!("Session ended."),
                         Err(error) => tracing::error!(%error, "Session ended with error."),
                     },
