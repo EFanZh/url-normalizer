@@ -1,11 +1,11 @@
-use crate::client_messages::{CheckRequest, ClientRequestData};
-use crate::server_messages::{CheckResponse, CheckStatus, ServerRequestData, ServerResponseData, UpdateStatusRequest};
+use crate::client_api::{CheckStatus, ServerRequestData, UpdateStatusRequest};
+use crate::server_api::{CheckRequest, CheckResponse, ClientRequestData, ServerResponseData};
 use futures::future::BoxFuture;
 use futures::{stream, FutureExt, StreamExt};
 use reqwest::Client;
 use std::fmt::Write;
-use websocket_rpc::ClientApi;
-use websocket_rpc::Handler;
+use websocket_rpc::RpcClient;
+use websocket_rpc::{Handler, ServerApi};
 
 async fn check_url(client: &Client, url: String) -> CheckStatus {
     let mut buffer = String::new();
@@ -61,7 +61,7 @@ async fn check_url(client: &Client, url: String) -> CheckStatus {
     CheckStatus::Error { message: buffer }
 }
 
-pub async fn check(client_api: ClientApi<ServerRequestData>, request: CheckRequest) -> CheckResponse {
+async fn check(rpc_client: RpcClient<ServerRequestData>, request: CheckRequest) -> CheckResponse {
     let client = Client::new();
 
     let mut iter = stream::iter(
@@ -74,7 +74,7 @@ pub async fn check(client_api: ClientApi<ServerRequestData>, request: CheckReque
     .buffer_unordered(16);
 
     while let Some((i, status)) = iter.next().await {
-        if let Err(error) = client_api.call(UpdateStatusRequest { index: i, status }).await {
+        if let Err(error) = rpc_client.call(UpdateStatusRequest { index: i, status }).await {
             tracing::warn!(%error, "Failed to update status.");
         }
     }
@@ -85,15 +85,18 @@ pub async fn check(client_api: ClientApi<ServerRequestData>, request: CheckReque
 pub struct ServerImpl;
 
 impl Handler for ServerImpl {
-    type ClientRequest = ServerRequestData;
-    type Request = ClientRequestData;
-    type Response = ServerResponseData;
-    type ResponseFuture = BoxFuture<'static, Self::Response>;
+    type ClientApi = ServerRequestData;
+    type ServerApi = ClientRequestData;
+    type ServerResponseFuture = BoxFuture<'static, <Self::ServerApi as ServerApi>::Response>;
 
-    fn handle(&mut self, client_api: ClientApi<ServerRequestData>, request: Self::Request) -> Self::ResponseFuture {
+    fn handle(
+        &mut self,
+        rpc_client: RpcClient<ServerRequestData>,
+        request: Self::ServerApi,
+    ) -> Self::ServerResponseFuture {
         async move {
             match request {
-                ClientRequestData::Check(request) => ServerResponseData::Check(check(client_api, request).await),
+                ClientRequestData::Check(request) => ServerResponseData::Check(check(rpc_client, request).await),
             }
         }
         .boxed()

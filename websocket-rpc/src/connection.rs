@@ -1,10 +1,9 @@
-use crate::client_messages::{ClientMessage, ClientMessageType, ClientRequest, ClientResponse};
-use crate::server_messages::{ClientMethod, ServerMessage, ServerRequest, ServerResponse};
+use crate::protocol::{ClientApi, ClientMethod, Message as JsonMessage, MessageData, MessageType};
+use crate::ServerApi;
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use futures::channel::oneshot;
+use futures::channel::oneshot::{self, Canceled, Sender};
 use futures::future::Either;
 use futures::{Future, FutureExt, SinkExt, StreamExt};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::value::{self, RawValue};
 use std::collections::HashMap;
@@ -17,37 +16,49 @@ use tokio_tungstenite::tungstenite::protocol::Role;
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::WebSocketStream;
 
+pub trait Handler {
+    type ClientApi: ClientApi;
+    type ServerApi: ServerApi;
+    type ServerResponseFuture: Future<Output = <Self::ServerApi as ServerApi>::Response> + Send + 'static;
+
+    fn handle(
+        &mut self,
+        rpc_client: RpcClient<Self::ClientApi>,
+        request: Self::ServerApi,
+    ) -> Self::ServerResponseFuture;
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Failed to deserialize response: {0}.")]
     Deserialization(serde_json::Error),
     #[error("Failed to serialize request: {0}.")]
     Serialization(serde_json::Error),
-    #[error("Client connection closed.")]
+    #[error("Client connection is closed.")]
     ConnectionClosed,
 }
 
-struct ServerRequest2 {
+struct ServerRequest {
     data: Box<RawValue>,
-    sender: oneshot::Sender<serde_json::Result<Box<RawValue>>>,
+    sender: Sender<serde_json::Result<Box<RawValue>>>,
 }
 
-enum ServerMessage2 {
-    Request(ServerRequest2),
-    Response(ServerResponse),
+enum ServerMessage {
+    Request(ServerRequest),
+    Response(MessageData),
 }
 
-pub struct ClientApi<U>
+pub struct RpcClient<T>
 where
-    U: Serialize,
+    T: ClientApi,
 {
-    sender: UnboundedSender<ServerMessage2>,
-    _phantom: PhantomData<U>,
+    sender: UnboundedSender<ServerMessage>,
+    _phantom: PhantomData<T>,
 }
 
-impl<T> ClientApi<T>
+impl<T> RpcClient<T>
 where
-    T: Serialize,
+    T: ClientApi,
 {
     pub fn call<R>(&self, request: R) -> impl Future<Output = Result<R::Output, Error>>
     where
@@ -57,7 +68,7 @@ where
             Ok(raw_value) => {
                 let (sender, receiver) = oneshot::channel();
 
-                match self.sender.unbounded_send(ServerMessage2::Request(ServerRequest2 {
+                match self.sender.unbounded_send(ServerMessage::Request(ServerRequest {
                     data: raw_value,
                     sender,
                 })) {
@@ -66,7 +77,7 @@ where
                             Ok(result) => result
                                 .map_err(Error::Serialization)
                                 .and_then(|data| serde_json::from_str(data.get()).map_err(Error::Deserialization)),
-                            Err(oneshot::Canceled) => Err(Error::ConnectionClosed),
+                            Err(Canceled) => Err(Error::ConnectionClosed),
                         }
                     })),
                     Err(_) => Either::Right(future::ready(Err(Error::ConnectionClosed))),
@@ -77,65 +88,39 @@ where
     }
 }
 
-pub trait Handler: Unpin {
-    type ClientRequest: Serialize;
-    type Request: DeserializeOwned;
-    type Response: Serialize + Send;
-    type ResponseFuture: Future<Output = Self::Response> + Send + 'static;
-
-    fn handle(&mut self, client_api: ClientApi<Self::ClientRequest>, request: Self::Request) -> Self::ResponseFuture;
-}
-
-fn handle_client_response(
-    requests: &mut HashMap<u64, oneshot::Sender<serde_json::Result<Box<RawValue>>>>,
-    response: ClientResponse,
-) {
-    if let Some(sender) = requests.remove(&response.task_id) {
-        match sender.send(Ok(response.data)) {
-            Ok(()) => {}
-            Err(_) => tracing::warn!(response.task_id, "Future has been canceled for task."),
-        }
-    } else {
-        tracing::warn!(response.task_id, "Unexpected client response task ID.");
-    }
-}
-
-fn next_task_id(task_id: &mut u64) -> u64 {
-    let result = *task_id;
-
-    *task_id = task_id.wrapping_add(1);
-
-    result
-}
-
 struct ClientToServer<'a, T> {
     client: &'a mut WebSocketStream<T>,
-    requests: &'a mut HashMap<u64, oneshot::Sender<serde_json::Result<Box<RawValue>>>>,
+    requests: &'a mut HashMap<u64, Sender<serde_json::Result<Box<RawValue>>>>,
 }
 
 impl<T> ClientToServer<'_, T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
+    fn handle_client_response(&mut self, response: MessageData) {
+        if let Some(sender) = self.requests.remove(&response.task_id) {
+            match sender.send(Ok(response.data)) {
+                Ok(()) => {}
+                Err(_) => tracing::warn!(response.task_id, "Future has been canceled for task."),
+            }
+        } else {
+            tracing::warn!(response.task_id, "Unexpected client response task ID.");
+        }
+    }
+
     fn poll_client_to_server_partial(
         &mut self,
         cx: &mut Context,
-    ) -> Poll<Option<tungstenite::Result<Option<ClientRequest>>>> {
+    ) -> Poll<Option<tungstenite::Result<Option<MessageData>>>> {
         self.client.poll_next_unpin(cx).map_ok(|message| {
             tracing::info!(content = ?message, "Got client message.");
 
             match message {
-                Message::Text(message) => match serde_json::from_str(&message) {
-                    Ok(ClientMessage {
-                        r#type: ClientMessageType::Request,
-                        task_id,
-                        data,
-                    }) => return Some(ClientRequest { task_id, data }),
-                    Ok(ClientMessage {
-                        r#type: ClientMessageType::Response,
-                        task_id,
-                        data,
-                    }) => handle_client_response(self.requests, ClientResponse { task_id, data }),
+                Message::Text(message) => match serde_json::from_str::<JsonMessage>(&message) {
+                    Ok(message) => match message.split() {
+                        (MessageType::Request, request) => return Some(request),
+                        (MessageType::Response, response) => self.handle_client_response(response),
+                    },
                     Err(error) => tracing::warn!(%error, "Failed to deserialize message."),
                 },
                 Message::Binary(_) => tracing::warn!("Unexpected binary message."),
@@ -153,15 +138,15 @@ where
 
 struct ServerToClient<'a, T> {
     client: &'a mut WebSocketStream<T>,
-    receiver: &'a mut UnboundedReceiver<ServerMessage2>,
+    receiver: &'a mut UnboundedReceiver<ServerMessage>,
 }
 
 impl<T> ServerToClient<'_, T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    fn handle_server_response(&mut self, response: ServerResponse) -> tungstenite::Result<()> {
-        match serde_json::to_string(&ServerMessage::Response(response)) {
+    fn handle_server_response(&mut self, response: MessageData) -> tungstenite::Result<()> {
+        match serde_json::to_string(&JsonMessage::response(response)) {
             Ok(message) => {
                 tracing::info!(content = message.as_str(), "Sending request to request.");
 
@@ -176,13 +161,13 @@ where
     fn poll_server_to_client_partial(
         &mut self,
         cx: &mut Context,
-    ) -> Poll<Option<tungstenite::Result<Option<ServerRequest2>>>> {
+    ) -> Poll<Option<tungstenite::Result<Option<ServerRequest>>>> {
         match futures::ready!(self.client.poll_ready_unpin(cx)) {
             Ok(()) => match futures::ready!(self.receiver.poll_next_unpin(cx)) {
                 None => self.client.poll_close_unpin(cx)?.map(|()| None),
                 Some(message) => Poll::Ready(Some(Ok(match message {
-                    ServerMessage2::Request(request) => Some(request),
-                    ServerMessage2::Response(response) => {
+                    ServerMessage::Request(request) => Some(request),
+                    ServerMessage::Response(response) => {
                         self.handle_server_response(response)?;
 
                         None
@@ -202,9 +187,9 @@ where
 struct Connected<'a, T, H> {
     client: &'a mut WebSocketStream<T>,
     handler: &'a mut H,
-    sender: &'a mut UnboundedSender<ServerMessage2>,
-    receiver: &'a mut UnboundedReceiver<ServerMessage2>,
-    requests: &'a mut HashMap<u64, oneshot::Sender<serde_json::Result<Box<RawValue>>>>,
+    sender: &'a mut UnboundedSender<ServerMessage>,
+    receiver: &'a mut UnboundedReceiver<ServerMessage>,
+    requests: &'a mut HashMap<u64, Sender<serde_json::Result<Box<RawValue>>>>,
     task_id: &'a mut u64,
 }
 
@@ -213,12 +198,12 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
     H: Handler,
 {
-    fn handle_client_request(&mut self, client_request: &ClientRequest) {
-        fn send_response(sender: &UnboundedSender<ServerMessage2>, task_id: u64, response: &impl Serialize) {
+    fn handle_client_request(&mut self, client_request: &MessageData) {
+        fn send_response(sender: &UnboundedSender<ServerMessage>, task_id: u64, response: &impl Serialize) {
             let data =
                 value::to_raw_value(response).unwrap_or_else(|error| value::to_raw_value(&error.to_string()).unwrap());
 
-            let response = ServerMessage2::Response(ServerResponse { task_id, data });
+            let response = ServerMessage::Response(MessageData { task_id, data });
 
             drop(sender.unbounded_send(response)); // Ignore send error;
         }
@@ -233,7 +218,7 @@ where
                 tokio::spawn(
                     self.handler
                         .handle(
-                            ClientApi {
+                            RpcClient {
                                 sender: client_api_sender,
                                 _phantom: PhantomData,
                             },
@@ -255,10 +240,18 @@ where
             })
     }
 
-    fn handle_server_request(&mut self, request: ServerRequest2) -> tungstenite::Result<()> {
-        let task_id = next_task_id(self.task_id);
+    fn next_task_id(&mut self) -> u64 {
+        let result = *self.task_id;
 
-        match serde_json::to_string(&ServerMessage::Request(ServerRequest {
+        *self.task_id = self.task_id.wrapping_add(1);
+
+        result
+    }
+
+    fn handle_server_request(&mut self, request: ServerRequest) -> tungstenite::Result<()> {
+        let task_id = self.next_task_id();
+
+        match serde_json::to_string(&JsonMessage::request(MessageData {
             task_id,
             data: request.data,
         })) {
@@ -311,24 +304,30 @@ enum State<'a, T, H> {
 }
 
 struct ClientToServerData<H> {
-    sender: UnboundedSender<ServerMessage2>,
-    requests: HashMap<u64, oneshot::Sender<serde_json::Result<Box<RawValue>>>>,
+    sender: UnboundedSender<ServerMessage>,
+    requests: HashMap<u64, Sender<serde_json::Result<Box<RawValue>>>>,
     task_id: u64,
     handler: H,
 }
 
 struct ServerToClientData {
-    receiver: UnboundedReceiver<ServerMessage2>,
+    receiver: UnboundedReceiver<ServerMessage>,
 }
 
-pub struct Connection<T, H>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-    H: Handler,
-{
-    client: WebSocketStream<T>,
-    client_to_server: Option<ClientToServerData<H>>,
-    server_to_client: Option<ServerToClientData>,
+pin_project_lite::pin_project! {
+    pub struct Connection<T, H>
+    where
+        // See <https://github.com/taiki-e/pin-project-lite/issues/2>.
+        T: AsyncRead,
+        T: AsyncWrite,
+        T: Unpin,
+        H: Handler,
+    {
+        #[pin]
+        client: WebSocketStream<T>,
+        client_to_server: Option<ClientToServerData<H>>,
+        server_to_client: Option<ServerToClientData>,
+    }
 }
 
 impl<T, H> Connection<T, H>

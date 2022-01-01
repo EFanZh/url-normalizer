@@ -1,6 +1,5 @@
-use crate::client_messages::UpdateStatusResponse;
-use serde::Serialize;
-use websocket_rpc::ClientMethod;
+use serde::{Deserialize, Serialize};
+use websocket_rpc::{ClientApi, ClientMethod};
 
 #[derive(Serialize)]
 #[serde(tag = "status")]
@@ -17,27 +16,25 @@ pub struct UpdateStatusRequest {
     pub status: CheckStatus,
 }
 
+#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
+#[derive(Deserialize)]
+pub struct UpdateStatusResponse;
+
 #[derive(Serialize, derive_more::From)]
 #[serde(tag = "method", content = "argument")]
 pub enum ServerRequestData {
     UpdateStatus(UpdateStatusRequest),
 }
 
+impl ClientApi for ServerRequestData {}
+
 impl ClientMethod<ServerRequestData> for UpdateStatusRequest {
     type Output = UpdateStatusResponse;
 }
 
-#[derive(Serialize)]
-pub struct CheckResponse;
-
-#[derive(Serialize)]
-pub enum ServerResponseData {
-    Check(CheckResponse),
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{CheckResponse, CheckStatus, ServerRequestData, UpdateStatusRequest};
+    use super::{CheckStatus, ServerRequestData, UpdateStatusRequest, UpdateStatusResponse};
 
     #[test]
     fn test_serialize_check_status() {
@@ -61,6 +58,14 @@ mod tests {
     }
 
     #[test]
+    fn test_deserialize_update_status_response() {
+        assert_eq!(
+            serde_json::from_str::<UpdateStatusResponse>("null").unwrap(),
+            UpdateStatusResponse
+        );
+    }
+
+    #[test]
     fn test_serialize_server_request_data() {
         assert_eq!(
             serde_json::to_value(ServerRequestData::UpdateStatus(UpdateStatusRequest {
@@ -70,16 +75,11 @@ mod tests {
             .unwrap(),
             serde_json::json!({
                 "method": "UpdateStatus",
-                "data": {
+                "argument": {
                     "index": 3,
                     "status": "Updated",
                 }
             })
         );
-    }
-
-    #[test]
-    fn test_serialize_check_response() {
-        assert_eq!(serde_json::to_value(CheckResponse).unwrap(), serde_json::json!(null));
     }
 }

@@ -72,8 +72,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 use websocket_rpc::Connection;
 
 mod check;
-mod client_messages;
-mod server_messages;
+mod client_api;
+mod server_api;
 
 async fn handle_request(mut request: Request<Body>) -> anyhow::Result<Response<Body>> {
     tracing::info!(method = %request.method(), uri = %request.uri(), "Got client request.");

@@ -61,10 +61,8 @@
 )]
 #![allow(clippy::non_ascii_literal, clippy::wildcard_imports)] // https://github.com/tokio-rs/tracing/pull/1806.
 
-pub use crate::client_messages::ServerMethod;
-pub use crate::connection::{ClientApi, Connection, Error, Handler};
-pub use crate::server_messages::ClientMethod;
+pub use crate::connection::{Connection, Error, Handler, RpcClient};
+pub use crate::protocol::{ClientApi, ClientMethod, ServerApi, ServerMethod};
 
-mod client_messages;
 mod connection;
-mod server_messages;
+mod protocol;

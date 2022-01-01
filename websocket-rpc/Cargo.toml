@@ -5,6 +5,7 @@ version = "0.1.0"
 
 [dependencies]
 futures = "*"
+pin-project-lite = "*"
 serde = { version = "*", features = ["derive"] }
 serde_json = { version = "*", features = ["raw_value"] }
 thiserror = "*"
