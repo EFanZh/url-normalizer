@@ -101,10 +101,10 @@ where
         if let Some(sender) = self.requests.remove(&response.task_id) {
             match sender.send(Ok(response.data)) {
                 Ok(()) => {}
-                Err(_) => tracing::warn!(response.task_id, "Future has been canceled for task."),
+                Err(_) => tracing::warn!(response.task_id, "Ignoring client response, task has been canceled."),
             }
         } else {
-            tracing::warn!(response.task_id, "Unexpected client response task ID.");
+            tracing::warn!(response.task_id, "Ignoring client response, the task ID is invalid.");
         }
     }
 
@@ -113,7 +113,7 @@ where
         cx: &mut Context,
     ) -> Poll<Option<tungstenite::Result<Option<MessageData>>>> {
         self.client.poll_next_unpin(cx).map_ok(|message| {
-            tracing::info!(content = ?message, "Got client message.");
+            tracing::info!(content = %message, "Received WebSocket message.");
 
             match message {
                 Message::Text(message) => match serde_json::from_str::<JsonMessage>(&message) {
@@ -121,9 +121,9 @@ where
                         (MessageType::Request, request) => return Some(request),
                         (MessageType::Response, response) => self.handle_client_response(response),
                     },
-                    Err(error) => tracing::warn!(%error, "Failed to deserialize message."),
+                    Err(error) => tracing::warn!(%error, "Ignoring unrecognized client WebSocket message."),
                 },
-                Message::Binary(_) => tracing::warn!("Unexpected binary message."),
+                Message::Binary(_) => tracing::warn!("Ignoring client WebSocket binary message."),
                 Message::Ping(_) | Message::Pong(_) | Message::Close(_) => {}
             }
 
@@ -146,14 +146,11 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     fn handle_server_response(&mut self, response: MessageData) -> tungstenite::Result<()> {
-        match serde_json::to_string(&JsonMessage::response(response)) {
-            Ok(message) => {
-                tracing::info!(content = message.as_str(), "Sending request to request.");
+        let message = JsonMessage::response(response).serialize_to_json_string();
 
-                self.client.start_send_unpin(Message::Text(message))?;
-            }
-            Err(error) => tracing::error!(%error, "Failed to serialize response message."),
-        }
+        tracing::info!(content = %message.as_str(), "Sending response to client.");
+
+        self.client.start_send_unpin(Message::Text(message))?;
 
         Ok(())
     }
@@ -250,24 +247,14 @@ where
 
     fn handle_server_request(&mut self, request: ServerRequest) -> tungstenite::Result<()> {
         let task_id = self.next_task_id();
+        let ServerRequest { data, sender } = request;
+        let message = JsonMessage::request(MessageData { task_id, data }).serialize_to_json_string();
 
-        match serde_json::to_string(&JsonMessage::request(MessageData {
-            task_id,
-            data: request.data,
-        })) {
-            Ok(message) => {
-                tracing::info!(content = message.as_str(), "Sending request to request.");
+        tracing::info!(content = %message.as_str(), "Sending request to client.");
 
-                self.client.start_send_unpin(Message::Text(message)).map(|()| {
-                    self.requests.insert(task_id, request.sender);
-                })
-            }
-            Err(error) => {
-                drop(request.sender.send(Err(error))); // Ignore send error.
-
-                Ok(())
-            }
-        }
+        self.client.start_send_unpin(Message::Text(message)).map(|()| {
+            self.requests.insert(task_id, sender);
+        })
     }
 
     fn poll_server_to_client(&mut self, cx: &mut Context) -> Poll<Option<tungstenite::Result<()>>> {

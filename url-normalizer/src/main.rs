@@ -63,7 +63,7 @@
 
 use crate::check::ServerImpl;
 use hyper::header::HeaderValue;
-use hyper::{header, service, upgrade, Body, Request, Response, Server, StatusCode};
+use hyper::{header, service, upgrade, Body, Method, Request, Response, Server, StatusCode};
 use std::convert::Infallible;
 use std::future;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -76,55 +76,63 @@ mod client_api;
 mod server_api;
 
 async fn handle_request(mut request: Request<Body>) -> anyhow::Result<Response<Body>> {
-    tracing::info!(method = %request.method(), uri = %request.uri(), "Got client request.");
+    let uri = request.uri();
 
-    if request.uri().path() == "/" {
-        let mut response = Response::new(Body::from(include_str!("../ui/index.html")));
+    tracing::info!(method = %request.method(), uri = %uri, "Received HTTP request.");
 
-        *response.status_mut() = StatusCode::OK;
+    match (request.method(), uri.path()) {
+        (&Method::GET, "/") => {
+            let mut response = Response::new(Body::from(include_str!("../ui/index.html")));
 
-        Ok(response)
-    } else if request.uri().path() == "/api" {
-        let mut response = Response::new(Body::empty());
+            *response.status_mut() = StatusCode::OK;
 
-        if let (Some(connection), Some(upgrade), Some(key)) = (
-            request.headers_mut().remove(header::CONNECTION),
-            request.headers_mut().remove(header::UPGRADE),
-            request.headers_mut().remove(header::SEC_WEBSOCKET_KEY),
-        ) {
-            tokio::spawn(async {
-                tracing::info!("Session started.");
-
-                match upgrade::on(request).await {
-                    Ok(upgraded) => match Connection::new(upgraded, ServerImpl).await.await {
-                        Ok(()) => tracing::info!("Session ended."),
-                        Err(error) => tracing::error!(%error, "Session ended with error."),
-                    },
-                    Err(error) => tracing::error!(%error, "Failed to upgrade connection."),
-                }
-            });
-
-            *response.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
-
-            response.headers_mut().extend([
-                (header::CONNECTION, connection),
-                (header::UPGRADE, upgrade),
-                (
-                    header::SEC_WEBSOCKET_ACCEPT,
-                    HeaderValue::from_str(&handshake::derive_accept_key(key.as_bytes())).unwrap(),
-                ),
-            ]);
-        } else {
-            *response.status_mut() = StatusCode::BAD_REQUEST;
+            Ok(response)
         }
+        (&Method::GET, "/api") => {
+            let mut response = Response::new(Body::empty());
 
-        Ok(response)
-    } else {
-        let mut response = Response::new(Body::empty());
+            if let (Some(connection), Some(upgrade), Some(key)) = (
+                request.headers_mut().remove(header::CONNECTION),
+                request.headers_mut().remove(header::UPGRADE),
+                request.headers_mut().remove(header::SEC_WEBSOCKET_KEY),
+            ) {
+                tokio::spawn(async {
+                    match upgrade::on(request).await {
+                        Ok(upgraded) => {
+                            tracing::info!("Session started.");
 
-        *response.status_mut() = StatusCode::NOT_FOUND;
+                            match Connection::new(upgraded, ServerImpl).await.await {
+                                Ok(()) => tracing::info!("Session ended."),
+                                Err(error) => tracing::warn!(%error, "Session ended with error."),
+                            }
+                        }
+                        Err(error) => tracing::error!(%error, "Failed to upgrade connection."),
+                    }
+                });
 
-        Ok(response)
+                *response.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
+
+                response.headers_mut().extend([
+                    (header::CONNECTION, connection),
+                    (header::UPGRADE, upgrade),
+                    (
+                        header::SEC_WEBSOCKET_ACCEPT,
+                        HeaderValue::from_str(&handshake::derive_accept_key(key.as_bytes())).unwrap(),
+                    ),
+                ]);
+            } else {
+                *response.status_mut() = StatusCode::BAD_REQUEST;
+            }
+
+            Ok(response)
+        }
+        _ => {
+            let mut response = Response::new(Body::empty());
+
+            *response.status_mut() = StatusCode::NOT_FOUND;
+
+            Ok(response)
+        }
     }
 }
 
@@ -133,7 +141,11 @@ async fn main_inner() -> anyhow::Result<()> {
         service::make_service_fn(|_| future::ready(Ok::<_, Infallible>(service::service_fn(handle_request)))),
     );
 
-    open::that(format!("http://{}", server.local_addr()))?;
+    let server_url = format!("http://{}", server.local_addr());
+
+    tracing::info!(server_url = %server_url.as_str(), "Server started.",);
+
+    open::that(server_url)?;
 
     server.await?;
 

@@ -68,6 +68,10 @@ impl Message {
             },
         )
     }
+
+    pub fn serialize_to_json_string(&self) -> String {
+        serde_json::to_string(self).unwrap() // There must be a bug somewhere if this `unwrap()` call fails.
+    }
 }
 
 #[cfg(test)]
