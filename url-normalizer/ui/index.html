@@ -13,6 +13,7 @@
             function main() {
                 const urlSource = $("#urls");
                 const check = $("#check");
+                const progress = $("#progress");
                 const status = $("#status");
                 const pendingCalls = new Map();
                 const lineSplitter = /.+/g;
@@ -27,10 +28,13 @@
                         const row = tag("tr");
 
                         row.appendChild(tag("td")).innerText = url;
-                        row.appendChild(tag("td")).innerText = "Checking";
+                        row.appendChild(tag("td")).innerText = "Pending";
 
                         return row;
                     }));
+
+                    progress.max = urls.length;
+                    progress.value = 0;
 
                     await callServer("Check", { urls });
 
@@ -53,16 +57,27 @@
                 const handlers = {
                     UpdateStatus: (request) => {
                         const row = status.children[request.index];
+                        const statusCell = row.children[1];
 
-                        if (request.status === "Updated") {
-                            row.children[1].innerText = row.children[0].innerText;
-                            row.children[1].className = "status-updated";
-                        } else if (request.status === "Update") {
-                            row.children[1].innerText = request.url;
-                            row.children[1].className = "status-update";
-                        } else {
-                            row.children[1].innerText = request.message;
-                            row.children[1].className = "status-error";
+                        switch (request.status) {
+                            case "Checking":
+                                statusCell.innerText = "Checking";
+                                break;
+                            case "Updated":
+                                statusCell.innerText = row.children[0].innerText;
+                                statusCell.className = "status-updated";
+                                progress.value += 1;
+                                break;
+                            case "Update":
+                                statusCell.innerText = request.url;
+                                statusCell.className = "status-update";
+                                progress.value += 1;
+                                break;
+                            default:
+                                statusCell.innerText = request.message;
+                                statusCell.className = "status-error";
+                                progress.value += 1;
+                                break;
                         }
 
                         return null;
@@ -126,8 +141,12 @@
                 grid-column: 1 / -1;
             }
 
+            #progress {
+                align-self: center;
+                width: 100%;
+            }
+
             #status-container {
-                grid-row: span 2;
                 overflow: auto;
             }
 
@@ -141,6 +160,8 @@
             <h1>URL Normalizer</h1>
         </header>
         <button id="check">Check</button>
+        <progress id="progress" value="0"></progress>
+        <textarea id="urls"></textarea>
         <div id="status-container">
             <table>
                 <thead>
@@ -153,6 +174,5 @@
                 </tbody>
             </table>
         </div>
-        <textarea id="urls"></textarea>
     </body>
 </html>

@@ -16,6 +16,7 @@ impl ClientApi for UiApi {}
 #[derive(Serialize)]
 #[serde(tag = "status")]
 pub enum CheckStatus {
+    Checking,
     Updated,
     Update { url: String },
     Error { message: String },

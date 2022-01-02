@@ -83,13 +83,15 @@ async fn check_url(client: &Client, url: String) -> CheckStatus {
 async fn check(rpc_client: RpcClient<UiApi>, request: CheckRequest) -> CheckResponse {
     let client = Client::new();
 
-    let mut iter = stream::iter(
-        request
-            .urls
-            .into_iter()
-            .enumerate()
-            .map(|(i, url)| check_url(&client, url).map(move |status| (i, status))),
-    )
+    let mut iter = stream::iter(request.urls.into_iter().enumerate().map(|(i, url)| {
+        rpc_client
+            .call(UpdateStatusRequest {
+                index: i,
+                status: CheckStatus::Checking,
+            })
+            .then(|_| check_url(&client, url))
+            .map(move |status| (i, status))
+    }))
     .buffer_unordered(16);
 
     while let Some((i, status)) = iter.next().await {
