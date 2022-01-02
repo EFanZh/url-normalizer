@@ -64,6 +64,7 @@
 use crate::check::ServerImpl;
 use hyper::server::conn::AddrStream;
 use hyper::{service, upgrade, Body, Method, Request, Response, Server, StatusCode};
+use reqwest::Client;
 use std::convert::Infallible;
 use std::future::{self, Ready};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -88,12 +89,12 @@ fn make_response<T>(status: StatusCode, body: T) -> Response<T> {
     response
 }
 
-async fn handle_websocket_session(request: Request<Body>) {
+async fn handle_websocket_session(client: Client, request: Request<Body>) {
     match upgrade::on(request).await {
         Ok(upgraded) => {
             tracing::info!("WebSocket session started.");
 
-            match Connection::new(upgraded, ServerImpl).await.await {
+            match Connection::new(upgraded, ServerImpl::new(client)).await.await {
                 Ok(()) => tracing::info!("WebSocket session ended."),
                 Err(error) => tracing::warn!(%error, "WebSocket session ended with error."),
             }
@@ -102,7 +103,7 @@ async fn handle_websocket_session(request: Request<Body>) {
     }
 }
 
-fn handle_request(request: Request<Body>) -> Response<Body> {
+fn handle_request(client: &Client, request: Request<Body>) -> Response<Body> {
     let uri = request.uri();
 
     tracing::info!(method = %request.method(), uri = %uri, "Received HTTP request.");
@@ -114,7 +115,10 @@ fn handle_request(request: Request<Body>) -> Response<Body> {
         },
         "/api" => match server::create_response_with_body(&request, Body::empty) {
             Ok(response) => {
-                tokio::spawn(handle_websocket_session(request).instrument(tracing::info_span!("WebSocketSession")));
+                tokio::spawn(
+                    handle_websocket_session(client.clone(), request)
+                        .instrument(tracing::info_span!("WebSocketSession")),
+                );
 
                 response
             }
@@ -145,7 +149,10 @@ impl Counter {
 }
 
 async fn main_inner() -> anyhow::Result<()> {
+    const CHROME_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36";
+
     let mut connection_counter = Counter(0);
+    let client = Client::builder().user_agent(CHROME_USER_AGENT).build()?;
 
     let server = Server::bind(&SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))).serve(
         service::make_service_fn(move |connection: &AddrStream| {
@@ -154,13 +161,14 @@ async fn main_inner() -> anyhow::Result<()> {
             tracing::info_span!("Connection", id = connection_id, remote = %connection.remote_addr()).in_scope(|| {
                 let connection_span = Span::current();
                 let mut request_counter = Counter(0);
+                let client = client.clone();
 
                 make_future(service::service_fn(move |request| {
                     connection_span.in_scope(|| {
                         let request_id = request_counter.next();
 
                         tracing::info_span!("Request", id = request_id)
-                            .in_scope(|| make_future(handle_request(request)))
+                            .in_scope(|| make_future(handle_request(&client, request)))
                     })
                 }))
             })

@@ -80,9 +80,7 @@ async fn check_url(client: &Client, url: String) -> CheckStatus {
     CheckStatus::Error { message: buffer }
 }
 
-async fn check(rpc_client: RpcClient<UiApi>, request: CheckRequest) -> CheckResponse {
-    let client = Client::new();
-
+async fn check(client: Client, rpc_client: RpcClient<UiApi>, request: CheckRequest) -> CheckResponse {
     let mut iter = stream::iter(request.urls.into_iter().enumerate().map(|(i, url)| {
         rpc_client
             .call(UpdateStatusRequest {
@@ -103,7 +101,15 @@ async fn check(rpc_client: RpcClient<UiApi>, request: CheckRequest) -> CheckResp
     CheckResponse
 }
 
-pub struct ServerImpl;
+pub struct ServerImpl {
+    client: Client,
+}
+
+impl ServerImpl {
+    pub fn new(client: Client) -> Self {
+        Self { client }
+    }
+}
 
 impl Handler for ServerImpl {
     type ClientApi = UiApi;
@@ -111,9 +117,11 @@ impl Handler for ServerImpl {
     type ServerResponseFuture = BoxFuture<'static, <Self::ServerApi as ServerApi>::Response>;
 
     fn handle(&mut self, rpc_client: RpcClient<UiApi>, request: Self::ServerApi) -> Self::ServerResponseFuture {
+        let client = self.client.clone();
+
         async move {
             match request {
-                BackendApi::Check(request) => BackendApiResponse::Check(check(rpc_client, request).await),
+                BackendApi::Check(request) => BackendApiResponse::Check(check(client, rpc_client, request).await),
             }
         }
         .boxed()
