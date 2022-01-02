@@ -113,8 +113,7 @@ fn handle_request(client: &Client, request: Request<Body>) -> Response<Body> {
         "/api" => match server::create_response_with_body(&request, Body::empty) {
             Ok(response) => {
                 tokio::spawn(
-                    handle_websocket_session(client.clone(), request)
-                        .instrument(tracing::info_span!("WebSocketSession")),
+                    handle_websocket_session(client.clone(), request).instrument(tracing::info_span!("Session")),
                 );
 
                 response

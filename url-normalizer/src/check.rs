@@ -48,6 +48,8 @@ async fn check_url(client: &Client, url: String) -> CheckStatus {
 
                     buffer.clear();
 
+                    tracing::info!(method = %method, url = %candidate, "Begin to check URL.");
+
                     match client.request(method.clone(), &candidate).send().await {
                         Ok(response) => {
                             if response.status().is_success() {
