@@ -2,7 +2,7 @@ use crate::client_api::{CheckStatus, UiApi, UpdateStatusRequest};
 use crate::server_api::{BackendApi, BackendApiResponse, CheckRequest, CheckResponse};
 use futures::future::BoxFuture;
 use futures::{stream, FutureExt, StreamExt};
-use reqwest::{Client, Url};
+use reqwest::{Client, Method, Url};
 use std::fmt::Write;
 use websocket_rpc::{Handler, RpcClient, ServerApi};
 
@@ -38,37 +38,39 @@ async fn check_url(client: &Client, url: String) -> CheckStatus {
         let base = base.trim_end_matches('/');
         let mut candidate = String::from("http");
 
-        for s in ["s", ""] {
-            for slash in ["", "/"] {
-                candidate.push_str(s);
-                candidate.push_str("://");
-                candidate.push_str(base);
-                candidate.push_str(slash);
+        for method in [Method::HEAD, Method::GET] {
+            for s in ["s", ""] {
+                for slash in ["", "/"] {
+                    candidate.push_str(s);
+                    candidate.push_str("://");
+                    candidate.push_str(base);
+                    candidate.push_str(slash);
 
-                buffer.clear();
+                    buffer.clear();
 
-                match client.head(&candidate).send().await {
-                    Ok(response) => {
-                        if response.status().is_success() {
-                            let normalized_url = normalize_url(response.url());
+                    match client.request(method.clone(), &candidate).send().await {
+                        Ok(response) => {
+                            if response.status().is_success() {
+                                let normalized_url = normalize_url(response.url());
 
-                            return if normalized_url == url {
-                                CheckStatus::Updated
-                            } else {
-                                buffer.push_str(normalized_url);
+                                return if normalized_url == url {
+                                    CheckStatus::Updated
+                                } else {
+                                    buffer.push_str(normalized_url);
 
-                                CheckStatus::Update { url: buffer }
-                            };
+                                    CheckStatus::Update { url: buffer }
+                                };
+                            }
+
+                            write!(buffer, "{}", response.status()).unwrap();
                         }
+                        Err(error) => {
+                            write!(buffer, "{}", error).unwrap();
+                        }
+                    }
 
-                        write!(buffer, "{}", response.status()).unwrap();
-                    }
-                    Err(error) => {
-                        write!(buffer, "{}", error).unwrap();
-                    }
+                    candidate.truncate(4);
                 }
-
-                candidate.truncate(4);
             }
         }
     } else {
