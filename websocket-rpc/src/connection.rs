@@ -1,6 +1,6 @@
 use crate::cancellation_token::CancellationToken;
-use crate::protocol::{ClientApi, ClientMethod, Message as RpcMessage, MessageData, MessageType};
-use crate::{select, ServerApi};
+use crate::protocol::{ClientApi, ClientMethod, Message as RpcMessage, MessageData, MessageType, ServerApi};
+use crate::select;
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::channel::oneshot::{self, Canceled, Sender};
 use futures::future::Either;
