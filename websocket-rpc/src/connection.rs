@@ -16,6 +16,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_tungstenite::tungstenite::protocol::Role;
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::WebSocketStream;
+use tracing::Instrument;
 
 pub trait Handler {
     type ClientApi: ClientApi;
@@ -224,7 +225,15 @@ where
                     )
                     .map(move |response| send_response(&server_response_sender, task_id, &response));
 
-                tokio::spawn(select::select(handler_task, self.cancellation_token.cancelled()).map(drop));
+                let monitor_task = self.cancellation_token.cancelled().map(|()| {
+                    tracing::warn!("Handler task is cancelled because the session has ended.");
+                });
+
+                tokio::spawn(
+                    select::select(handler_task, monitor_task)
+                        .map(drop)
+                        .instrument(tracing::info_span!("Handler", task_id)),
+                );
             }
             Err(error) => send_response(self.sender, client_request.task_id, &error.to_string()),
         }
