@@ -14,7 +14,6 @@ serde = { version = "*", features = ["derive"] }
 tokio = { version = "*", features = ["macros", "rt"] }
 tokio-tungstenite = "*"
 tracing = "*"
-tracing-flame = "*"
 tracing-subscriber = "*"
 websocket-rpc = { path = "../websocket-rpc" }
 
