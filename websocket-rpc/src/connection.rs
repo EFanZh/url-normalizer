@@ -196,8 +196,8 @@ where
 {
     fn handle_client_request(&mut self, client_request: &MessageData) {
         fn send_response(sender: &UnboundedSender<ServerMessage>, task_id: u64, response: &impl Serialize) {
-            let data =
-                value::to_raw_value(response).unwrap_or_else(|error| value::to_raw_value(&error.to_string()).unwrap());
+            let data = value::to_raw_value(response)
+                .unwrap_or_else(|error| value::to_raw_value(error.to_string().as_str()).unwrap());
 
             let response = ServerMessage::Response(MessageData { task_id, data });
 
