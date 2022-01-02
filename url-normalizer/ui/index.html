@@ -13,11 +13,24 @@
             function main() {
                 const urlSource = $("#urls");
                 const check = $("#check");
+                const finished = $("#finished");
+                const total = $("#total");
                 const progress = $("#progress");
                 const status = $("#status");
                 const pendingCalls = new Map();
                 const lineSplitter = /.+/g;
                 let taskId = 0;
+
+                function resetProgress(max) {
+                    progress.max = max;
+                    progress.value = 0;
+                    total.innerText = max;
+                }
+
+                function incrementProgress() {
+                    progress.value += 1;
+                    finished.innerText = progress.value;
+                }
 
                 check.addEventListener("click", async () => {
                     check.disabled = true;
@@ -27,14 +40,15 @@
                     status.replaceChildren(...urls.map((url) => {
                         const row = tag("tr");
 
+                        row.className = "status-pending";
                         row.appendChild(tag("td")).innerText = url;
                         row.appendChild(tag("td")).innerText = "Pending";
+                        row.appendChild(tag("td"));
 
                         return row;
                     }));
 
-                    progress.max = urls.length;
-                    progress.value = 0;
+                    resetProgress(urls.length);
 
                     await callServer("Check", { urls });
 
@@ -58,25 +72,30 @@
                     UpdateStatus: (request) => {
                         const row = status.children[request.index];
                         const statusCell = row.children[1];
+                        const resultCell = row.children[2];
 
                         switch (request.status) {
                             case "Checking":
+                                row.className = "status-checking";
                                 statusCell.innerText = "Checking";
                                 break;
                             case "Updated":
-                                statusCell.innerText = row.children[0].innerText;
-                                statusCell.className = "status-updated";
-                                progress.value += 1;
+                                row.className = "status-updated";
+                                statusCell.innerText = "Updated";
+                                resultCell.innerText = row.children[0].innerText;
+                                incrementProgress();
                                 break;
                             case "Update":
-                                statusCell.innerText = request.url;
-                                statusCell.className = "status-update";
-                                progress.value += 1;
+                                row.className = "status-update";
+                                statusCell.innerText = "Update";
+                                resultCell.innerText = request.url;
+                                incrementProgress();
                                 break;
-                            default:
-                                statusCell.innerText = request.message;
-                                statusCell.className = "status-error";
-                                progress.value += 1;
+                            case "Error":
+                                row.className = "status-error";
+                                statusCell.innerText = "Error";
+                                resultCell.innerText = request.message;
+                                incrementProgress();
                                 break;
                         }
 
@@ -113,44 +132,82 @@
             server.addEventListener("open", init);
         </script>
         <style>
+            .status-pending {
+                color: rgba(0, 0, 0, 0.382);
+            }
+
+            .status-checking {
+                color: black;
+            }
+
             .status-updated {
-                color: green;
+                background: lightgreen;
             }
 
             .status-update {
-                color: dodgerblue;
+                background: lightblue;
             }
 
             .status-error {
-                color: red;
+                background: lightpink;
             }
 
             body {
+                box-sizing: border-box;
                 display: grid;
+                font: 14px / 1.5 system-ui;
+                gap: 10px;
+                grid-template-areas: "h h  h"
+                    ". p1 p2"
+                    ". t  t";
                 grid-template-columns: auto 1fr;
                 grid-template-rows: auto auto 1fr;
-                gap: 10px;
                 height: 100vh;
                 margin: 0;
                 padding: 10px;
-                box-sizing: border-box;
-                font: 14px / 1 system-ui;
             }
 
             header {
-                grid-column: 1 / -1;
+                grid-area: h;
+            }
+
+            table {
+                border-collapse: collapse;
+            }
+
+            thead {
+                background: white;
+                position: sticky;
+                top: 0;
+            }
+
+            td,
+            th {
+                padding: 0 0.25em;
             }
 
             #progress {
                 align-self: center;
+                grid-area: p1;
                 width: 100%;
             }
 
+            #progress-text {
+                align-self: center;
+                grid-area: p2;
+            }
+
             #status-container {
+                grid-area: t;
                 overflow: auto;
             }
 
+            #status-container th {
+                text-align: left;
+            }
+
             #urls {
+                white-space: nowrap;
                 resize: horizontal;
             }
         </style>
@@ -161,13 +218,19 @@
         </header>
         <button id="check">Check</button>
         <progress id="progress" value="0"></progress>
+        <div id="progress-text">
+            <span id="finished">0</span>
+            /
+            <span id="total">0</span>
+        </div>
         <textarea id="urls"></textarea>
         <div id="status-container">
             <table>
                 <thead>
                     <tr>
-                        <th>Url</th>
+                        <th>URL</th>
                         <th>Status</th>
+                        <th>Result</th>
                     </tr>
                 </thead>
                 <tbody id="status">
