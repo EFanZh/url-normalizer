@@ -62,14 +62,15 @@
 #![allow(clippy::non_ascii_literal, clippy::wildcard_imports)] // https://github.com/tokio-rs/tracing/pull/1806.
 
 use crate::check::ServerImpl;
+use hyper::server::conn::AddrStream;
 use hyper::{service, upgrade, Body, Method, Request, Response, Server, StatusCode};
 use std::convert::Infallible;
-use std::future;
+use std::future::{self, Ready};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use tokio_tungstenite::tungstenite;
+use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::handshake::server;
-use tracing::Instrument;
+use tracing::{Instrument, Span};
 use tracing_subscriber::util::SubscriberInitExt;
 use websocket_rpc::Connection;
 
@@ -77,63 +78,90 @@ mod check;
 mod client_api;
 mod server_api;
 
-async fn handle_request(request: Request<Body>) -> anyhow::Result<Response<Body>> {
+fn make_response<T>(status: StatusCode, body: T) -> Response<T> {
+    let mut response = Response::new(body);
+
+    *response.status_mut() = status;
+
+    response
+}
+
+async fn handle_websocket_session(request: Request<Body>) {
+    match upgrade::on(request).await {
+        Ok(upgraded) => {
+            tracing::info!("WebSocket session started.");
+
+            match Connection::new(upgraded, ServerImpl).await.await {
+                Ok(()) => tracing::info!("WebSocket session ended."),
+                Err(error) => tracing::warn!(%error, "WebSocket session ended with error."),
+            }
+        }
+        Err(error) => tracing::error!(%error, "Failed to upgrade connection."),
+    }
+}
+
+fn handle_request(request: Request<Body>) -> Response<Body> {
     let uri = request.uri();
 
     tracing::info!(method = %request.method(), uri = %uri, "Received HTTP request.");
 
-    match (request.method(), uri.path()) {
-        (&Method::GET, "/") => {
-            let mut response = Response::new(Body::from(include_str!("../ui/index.html")));
+    match uri.path() {
+        "/" => match *request.method() {
+            Method::GET => make_response(StatusCode::OK, Body::from(include_str!("../ui/index.html"))),
+            _ => make_response(StatusCode::METHOD_NOT_ALLOWED, Body::empty()),
+        },
+        "/api" => match server::create_response_with_body(&request, Body::empty) {
+            Ok(response) => {
+                tokio::spawn(handle_websocket_session(request).instrument(tracing::info_span!("WebSocketSession")));
 
-            *response.status_mut() = StatusCode::OK;
+                response
+            }
+            Err(tungstenite::Error::Protocol(ProtocolError::WrongHttpMethod)) => {
+                make_response(StatusCode::METHOD_NOT_ALLOWED, Body::empty())
+            }
+            Err(tungstenite::Error::Protocol(_)) => make_response(StatusCode::BAD_REQUEST, Body::empty()),
+            Err(_) => make_response(StatusCode::INTERNAL_SERVER_ERROR, Body::empty()),
+        },
+        _ => make_response(StatusCode::NOT_FOUND, Body::empty()),
+    }
+}
 
-            Ok(response)
-        }
-        (&Method::GET, "/api") => {
-            let response = server::create_response_with_body(&request, Body::empty)?;
+fn make_future<T>(value: T) -> Ready<Result<T, Infallible>> {
+    future::ready(Ok(value))
+}
 
-            tokio::spawn(
-                async {
-                    match upgrade::on(request).await {
-                        Ok(upgraded) => {
-                            tracing::info!("WebSocket session started.");
+struct Counter(usize);
 
-                            match Connection::new(upgraded, ServerImpl).await.await {
-                                Ok(()) => tracing::info!("WebSocket session ended."),
-                                Err(error) => tracing::warn!(%error, "WebSocket session ended with error."),
-                            }
-                        }
-                        Err(error) => tracing::error!(%error, "Failed to upgrade connection."),
-                    }
-                }
-                .instrument(tracing::info_span!("WebSocketSession")),
-            );
+impl Counter {
+    fn next(&mut self) -> usize {
+        let result = self.0;
 
-            Ok(response)
-        }
-        _ => {
-            let mut response = Response::new(Body::empty());
+        self.0 += 1;
 
-            *response.status_mut() = StatusCode::NOT_FOUND;
-
-            Ok(response)
-        }
+        result
     }
 }
 
 async fn main_inner() -> anyhow::Result<()> {
-    let counter = Arc::new(AtomicUsize::new(0));
+    let mut connection_counter = Counter(0);
 
     let server = Server::bind(&SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))).serve(
-        service::make_service_fn(move |_| {
-            let counter = Arc::clone(&counter);
+        service::make_service_fn(move |connection: &AddrStream| {
+            let connection_id = connection_counter.next();
 
-            future::ready(Ok::<_, Infallible>(service::service_fn(move |request| {
-                let id = counter.fetch_add(1, Ordering::Relaxed);
+            tracing::info_span!("Connection", id = connection_id, remote = %connection.remote_addr()).in_scope(|| {
+                let connection_span = Span::current();
+                let mut request_counter = Counter(0);
 
-                handle_request(request).instrument(tracing::info_span!("Request", id))
-            })))
+                make_future(service::service_fn(move |request| {
+                    connection_span.in_scope(|| {
+                        let request_id = request_counter.next();
+
+                        tracing::info_span!("Request", id = request_id)
+                            .in_scope(|| make_future(handle_request(request)))
+                    })
+                }))
+            })
         }),
     );
 
