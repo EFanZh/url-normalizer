@@ -1,5 +1,6 @@
+use crate::cancellation_token::CancellationToken;
 use crate::protocol::{ClientApi, ClientMethod, Message as RpcMessage, MessageData, MessageType};
-use crate::ServerApi;
+use crate::{select, ServerApi};
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::channel::oneshot::{self, Canceled, Sender};
 use futures::future::Either;
@@ -187,6 +188,7 @@ struct Connected<'a, T, H> {
     receiver: &'a mut UnboundedReceiver<ServerMessage>,
     requests: &'a mut HashMap<u64, Sender<Box<RawValue>>>,
     task_id: &'a mut u64,
+    cancellation_token: &'a CancellationToken,
 }
 
 impl<T, H> Connected<'_, T, H>
@@ -211,17 +213,18 @@ where
                 let server_response_sender = self.sender.clone();
                 let task_id = client_request.task_id;
 
-                tokio::spawn(
-                    self.handler
-                        .handle(
-                            RpcClient {
-                                sender: client_api_sender,
-                                _phantom: PhantomData,
-                            },
-                            request,
-                        )
-                        .map(move |response| send_response(&server_response_sender, task_id, &response)),
-                );
+                let handler_task = self
+                    .handler
+                    .handle(
+                        RpcClient {
+                            sender: client_api_sender,
+                            _phantom: PhantomData,
+                        },
+                        request,
+                    )
+                    .map(move |response| send_response(&server_response_sender, task_id, &response));
+
+                tokio::spawn(select::select(handler_task, self.cancellation_token.cancelled()).map(drop));
             }
             Err(error) => send_response(self.sender, client_request.task_id, &error.to_string()),
         }
@@ -282,6 +285,7 @@ where
     }
 }
 
+#[allow(variant_size_differences)]
 enum State<'a, T, H> {
     Connected(Connected<'a, T, H>),
     ClientToServer(ClientToServer<'a, T>),
@@ -313,6 +317,7 @@ pin_project_lite::pin_project! {
         client: WebSocketStream<T>,
         client_to_server: Option<ClientToServerData<H>>,
         server_to_client: Option<ServerToClientData>,
+        cancellation_token: CancellationToken,
     }
 }
 
@@ -333,6 +338,7 @@ where
                 handler,
             }),
             server_to_client: Some(ServerToClientData { receiver }),
+            cancellation_token: CancellationToken::new(),
         }
     }
 
@@ -362,6 +368,7 @@ where
                 requests,
                 task_id,
                 handler,
+                cancellation_token: &self.cancellation_token,
             }),
         }
     }

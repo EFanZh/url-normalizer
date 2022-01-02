@@ -64,5 +64,7 @@
 pub use crate::connection::{Connection, Error, Handler, RpcClient};
 pub use crate::protocol::{ClientApi, ClientMethod, ServerApi, ServerMethod};
 
+mod cancellation_token;
 mod connection;
 mod protocol;
+mod select;
