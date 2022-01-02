@@ -71,6 +71,8 @@ use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::handshake::server;
 use tracing::{Instrument, Span};
+use tracing_flame::FlameLayer;
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use websocket_rpc::Connection;
 
@@ -178,7 +180,12 @@ async fn main_inner() -> anyhow::Result<()> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().finish().init();
+    let (flame_layer, _flame_layer_guard) = FlameLayer::with_file("url-normalizer-tracing.folded").unwrap();
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(flame_layer)
+        .init();
 
     main_inner().await
 }
