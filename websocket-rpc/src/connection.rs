@@ -66,14 +66,14 @@ where
     where
         R: ClientMethod<C>,
     {
-        match value::to_raw_value::<C>(&request.into()).map_err(Error::Serialization) {
-            Ok(request_data) => {
+        match value::to_raw_value::<C>(&request.into()) {
+            Ok(data) => {
                 let (sender, receiver) = oneshot::channel();
 
-                match self.sender.unbounded_send(ServerMessage::Request(ServerRequest {
-                    data: request_data,
-                    sender,
-                })) {
+                match self
+                    .sender
+                    .unbounded_send(ServerMessage::Request(ServerRequest { data, sender }))
+                {
                     Ok(()) => Either::Left(receiver.map(|result| match result {
                         Ok(response_data) => serde_json::from_str(response_data.get()).map_err(Error::Deserialization),
                         Err(Canceled) => Err(Error::ConnectionClosed),
@@ -81,7 +81,7 @@ where
                     Err(_) => Either::Right(future::ready(Err(Error::ConnectionClosed))),
                 }
             }
-            Err(_) => Either::Right(future::ready(Err(Error::ConnectionClosed))),
+            Err(error) => Either::Right(future::ready(Err(Error::Serialization(error)))),
         }
     }
 }
